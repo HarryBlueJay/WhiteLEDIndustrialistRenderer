@@ -96,16 +96,19 @@ else:
 print("Estimating render time...", end="\r")
 lastProcessedFrame = [False]*width*height
 pixelDiffs = 0
-for frame in videoFramesProcessed:
+for index in range(totalFiles):
+    frame = videoFramesProcessed[index]
     if index < startFrame:
         continue
     for index in range(len(frame)):
         if frame[index] == lastProcessedFrame[index]:
             continue
         pixelDiffs += 1
-    frame = lastProcessedFrame
-pixelDiffs /= 4.6 # only accurate if speed is 2
-print(f"Render time estimation: ~{round(pixelDiffs,2)}s")
+    lastProcessedFrame = frame
+pixelDiffs /= 12 # only accurate if speed is 2
+pixelDiffs += totalFiles*(2/60+1/12)
+pixelDiffs *= 1.7 # fudge factor, more closely matches how long it took to render bad apple
+print(f"Render time estimation: ~{round(pixelDiffs//3600)}h {round(pixelDiffs//60 % 60)}m {round(pixelDiffs%1)}s")
 
 # notices
 print(f"Press {startKey} to start movement")
