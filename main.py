@@ -1,6 +1,7 @@
 import pyautogui
 import autoit # according to a stackoverflow post, this might help make it work? "you have to use pyautoit to make it work inside of roblox" 
 import os
+import sys
 import shutil
 import math
 from pynput import mouse
@@ -12,6 +13,8 @@ inputDirectory = "./input/"
 outputDirectory = "./rendered/"
 testDisableLoading = False
 clickSpeed: int = 2 # from testing, values below two cause pixels to be double clicked, but if this happens on two, increase until it works
+
+# key bindings
 startKey = "G"
 stopKey = "C"
 polePositionSetKey = "F"
@@ -27,12 +30,25 @@ totalFiles = len(files)
 renderedFrameFiles = os.listdir(outputDirectory)
 renderedFiles = len(renderedFrameFiles)
 startFrame = 0
+endFrame = -1
+
+# frame checks
+customDuration = len(sys.argv) > 1
+if customDuration:
+    duration = sys.argv[1].split("-")
+    if duration[0]:
+        startFrame = int(duration[0])
+    if duration[1]:
+        endFrame = int(duration[1])
+    else:
+        endFrame = startFrame
+    print(f"Custom duration detected! Rendering frames {startFrame}-{endFrame}")
 
 # checks
 if totalFiles == 0:
     print("Input directory is empty.")
     os._exit(1)
-if renderedFiles != 0:
+if renderedFiles != 0 and not customDuration:
     importFiles = input("Files are already in the output directory. Would you like to continue from the last rendered frame? (Y/N) ")
     if importFiles.upper() == "Y":
         startFrame = renderedFiles
@@ -48,7 +64,7 @@ if renderedFiles != 0:
                 break
 
 # video metadata
-image = Image.open(inputDirectory+files[1],"r") # read dimensions()
+image = Image.open(inputDirectory+files[1],"r")
 width, height = image.size
 
 # helper functions
@@ -96,17 +112,21 @@ else:
 print("Estimating render time...", end="\r")
 lastProcessedFrame = [False]*width*height
 pixelDiffs = 0
+processedFrames = 0
 for index in range(totalFiles):
     frame = videoFramesProcessed[index]
     if index < startFrame:
         continue
+    if index > endFrame:
+        break
     for index in range(len(frame)):
         if frame[index] == lastProcessedFrame[index]:
             continue
         pixelDiffs += 1
     lastProcessedFrame = frame
+    processedFrames += 1
 pixelDiffs /= 12 # only accurate if speed is 2
-pixelDiffs += totalFiles*(2/60+1/12)
+pixelDiffs += processedFrames*(2/60+1/12+1/10)
 pixelDiffs *= 1.7 # fudge factor, more closely matches how long it took to render bad apple
 print(f"Render time estimation: ~{round(pixelDiffs//3600)}h {round(pixelDiffs//60 % 60)}m {round(pixelDiffs%1)}s")
 
@@ -235,6 +255,8 @@ pyautogui.PAUSE = 0
 for index in range(totalFiles):
     if index < startFrame:
         continue
+    if index > endFrame:
+        break
     print(f"Rendering frame {index+1}/{totalFiles}", end="\r")
     placeFrame(videoFramesProcessed[index])
     autoit.send("2")
