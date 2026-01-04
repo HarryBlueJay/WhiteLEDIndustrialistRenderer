@@ -14,6 +14,23 @@ outputDirectory = "./rendered/"
 testDisableLoading = False
 clickSpeed: int = 2 # from testing, values below two cause pixels to be double clicked, but if this happens on two, increase until it works
 
+# quality control constants
+# you might have to change these based on ping
+
+# time after taking a screenshot that it'll reread the display until giving up and clicking again
+# stuck pixels are very occaisionally an issue
+# DON'T set to 0 if you wish to disable frame verification, set disableStateReading to true (or would i say True? lua-brained)
+maxWaitingTime = 2
+
+# determines whether any frame verification will be done
+# disabling might lead to some artifacts on the last pixels of a frame, as well as stuck pixels persisting
+# this will disable itself automatically if it can't read any pixel, due to a logic pole obscuring a pixel
+# it only checks for logic poles, if you wanna break it by using the npp's logic nodes, be my guest
+disableStateReading = False
+
+# if state reading is disabled, how long to wait after placing the frame to taking a screenshot?
+fallbackWaitingTime = 0.5
+
 # key bindings
 startKey = "G"
 stopKey = "C"
@@ -59,6 +76,7 @@ if renderedFiles != 0 and not customDuration:
             if clearFiles.upper() == "Y":
                 shutil.rmtree(outputDirectory)
                 os.mkdir(outputDirectory)
+                renderedFiles = 0
                 break
             elif clearFiles.upper() == "N":
                 break
@@ -70,6 +88,13 @@ width, height = image.size
 # helper functions
 def mean(tuple):
     return sum(tuple)/len(tuple)
+# hi thanks https://stackoverflow.com/questions/8863810/python-find-similar-colors-best-way
+def colorDistance(e1, e2):
+    rmean = int((e1[0]+e2[0])/2)
+    r = int(e1[0]-e2[0])
+    g = int(e1[1]-e2[1])
+    b = int(e1[2]-e2[2])
+    return math.sqrt((((512+rmean)*r*r)>>8) + 4*g*g + (((767-rmean)*b*b)>>8))
 
 # video functions   
 videoFramesProcessed = []
@@ -79,7 +104,7 @@ def createFrame(fileName):
     frame = [False]*width*height
     for index in range(len(pixels)):
         brightness = mean(pixels[index])
-        if brightness > 128:
+        if brightness > 127:
             frame[index] = True
     videoFramesProcessed.append(frame)
     
@@ -117,7 +142,7 @@ for index in range(totalFiles):
     frame = videoFramesProcessed[index]
     if index < startFrame:
         continue
-    if index > endFrame:
+    if endFrame > -1 and index > endFrame:
         break
     for index in range(len(frame)):
         if frame[index] == lastProcessedFrame[index]:
@@ -126,7 +151,11 @@ for index in range(totalFiles):
     lastProcessedFrame = frame
     processedFrames += 1
 pixelDiffs /= 12 # only accurate if speed is 2
-pixelDiffs += processedFrames*(2/60+1/12+1/10)
+pixelDiffs += processedFrames*(
+    2/60+ # all waits between key presses
+    1/12+ # time to click the pole
+    1/10 # time a screenshot takes
+    )
 pixelDiffs *= 1.7 # fudge factor, more closely matches how long it took to render bad apple
 print(f"Render time estimation: ~{round(pixelDiffs//3600)}h {round(pixelDiffs//60 % 60)}m {round(pixelDiffs%1)}s")
 
@@ -187,42 +216,47 @@ bottomRight = []
 screenshot = pyautogui.screenshot("searchedImage.png")
 screenWidth, screenHeight = screenshot.size
 
-biggestXPixel = 0
-smallestXPixel = math.inf
-biggestYPixel = 0
-smallestYPixel = math.inf
+# screen bound functions
+def getScreenBounds(screenshot):
+    biggestXPixel = 0
+    smallestXPixel = math.inf
+    biggestYPixel = 0
+    smallestYPixel = math.inf
 
-for y in range(screenHeight):
-    for x in range(screenWidth):
-        brightness = mean(screenshot.getpixel((x,y)))
-        # this magic number came from the brightness of the chrome ui, which is ~28
-        if brightness <= 248:
-            continue
-        if x < smallestXPixel:
-            smallestXPixel = x
-        if x > biggestXPixel:
-            biggestXPixel = x
-        if y < smallestYPixel:
-            smallestYPixel = y
-        if y > biggestYPixel:
-            biggestYPixel = y
-topLeft = [smallestXPixel,smallestYPixel]
-topRight = [biggestXPixel,smallestYPixel]
-bottomLeft = [smallestXPixel,biggestYPixel]
-bottomRight = [biggestXPixel,biggestYPixel]
-screenshotDrawable = ImageDraw.Draw(screenshot)
-screenshotDrawable.line([topLeft, topRight, bottomRight, bottomLeft, topLeft],fill=(255,0,0),width=2)
-areaWidth = width + 2
-areaHeight = height + 2
-# generate led positions
-ledPositions = [[(0,0) for x in range(height)] for y in range(width)] 
-for x in range(width):
-    for y in range(height):
-        xPosition = topLeft[0] + ((x+1.5)/areaWidth)*(topRight[0]-topLeft[0])
-        yPosition = topLeft[1] + ((y+1.5)/areaHeight)*(bottomLeft[1]-topLeft[1])
-        ledPositions[x][y] = [xPosition, yPosition]
-        screenshotDrawable.point((xPosition, yPosition))
-screenshot.save("imageRecognizedParts.png")
+    for y in range(screenHeight):
+        for x in range(screenWidth):
+            brightness = mean(screenshot.getpixel((x,y)))
+            # this magic number came from the chrome ui
+            if brightness <= 248:
+                continue
+            if x < smallestXPixel:
+                smallestXPixel = x
+            if x > biggestXPixel:
+                biggestXPixel = x
+            if y < smallestYPixel:
+                smallestYPixel = y
+            if y > biggestYPixel:
+                biggestYPixel = y
+    return [smallestXPixel,smallestYPixel], [biggestXPixel,smallestYPixel], [smallestXPixel,biggestYPixel], [biggestXPixel,biggestYPixel]
+
+def generateLEDPositions(screenshot):
+    topLeft, topRight, bottomLeft, bottomRight = getScreenBounds(screenshot)
+    screenshotDrawable = ImageDraw.Draw(screenshot)
+    screenshotDrawable.line([topLeft, topRight, bottomRight, bottomLeft, topLeft],fill=(255,0,0),width=2)
+    areaWidth = width + 2
+    areaHeight = height + 2
+
+    # generate led positions
+    ledPositions = [[(0,0) for x in range(height)] for y in range(width)] 
+    for x in range(width):
+        for y in range(height):
+            xPosition = topLeft[0] + ((x+1.5)/areaWidth)*(topRight[0]-topLeft[0])
+            yPosition = topLeft[1] + ((y+1.5)/areaHeight)*(bottomLeft[1]-topLeft[1])
+            ledPositions[x][y] = [xPosition, yPosition]
+            screenshotDrawable.point((xPosition, yPosition))
+    screenshot.save("imageRecognizedParts.png")
+    return ledPositions
+ledPositions = generateLEDPositions(screenshot)
 print("Set the location of the power pole.")
 while not polePositionSelected:
     time.sleep(1/60)
@@ -249,23 +283,64 @@ def placeFrame(frame):
         autoit.mouse_click("left",int(position[0]),int(position[1]),speed=clickSpeed)
     lastRenderedFrame = frame
 
+def readLEDState(image):
+    global disableStateReading
+    if disableStateReading:
+        return False
+    ledState = [False]*width*height
+    # uncomment this if you want it to work on any input image, for testing
+    # note, doing so will add ~2s of runtime
+    # ledPositions = generateLEDPositions(image)
+    for index in range(len(lastRenderedFrame)):
+        pixel = image.getpixel(ledPositions[index % width][index // width])
+        if colorDistance(pixel,(255,255,0)) < colorDistance(pixel,(0,0,0)) and colorDistance(pixel,(255,255,0)) < colorDistance(pixel,(255,255,255)):
+            disableStateReading = True
+            print("Quality control disabled. You may notice some artifacts on the last pixels of a frame.")
+            return False
+        if mean(pixel) > 127:
+            ledState[index] = True
+    return ledState
+def prepareForNextFrame():
+    autoit.send("2")
+    position = polePosition
+    if dualPoleMode:
+        position = upperPolePosition
+    autoit.mouse_click("left",int(position[0]),int(position[1]),speed=clickSpeed) # you better not be a race condition
+ledState = readLEDState(pyautogui.screenshot())
+lastRenderedFrame = ledState or lastRenderedFrame
 # begin placement
 pyautogui.FAILSAFE = False # kerchow
 pyautogui.PAUSE = 0
 for index in range(totalFiles):
     if index < startFrame:
         continue
-    if index > endFrame:
+    if endFrame > -1 and index > endFrame:
         break
     print(f"Rendering frame {index+1}/{totalFiles}", end="\r")
     placeFrame(videoFramesProcessed[index])
     autoit.send("2")
-    time.sleep(1/60)
-    pyautogui.screenshot(outputDirectory+str(index)+".png")
-    autoit.send("2")
-    position = polePosition
-    if dualPoleMode:
-        position = upperPolePosition
-    autoit.mouse_click("left",int(position[0]),int(position[1]),speed=clickSpeed) # you better not be a race condition
+    if disableStateReading:
+        time.sleep(fallbackWaitingTime)
+    else:
+        time.sleep(1/60)
+    renderedFrame = pyautogui.screenshot(outputDirectory+str(index)+".png")
+    ledState = readLEDState(renderedFrame)
+    # accuracy verification
+    if ledState:
+        waitStart = time.time()
+        while ledState != videoFramesProcessed[index]:
+            renderedFrame = pyautogui.screenshot(outputDirectory+str(index)+".png")
+            ledState = readLEDState(renderedFrame)
+            # prevent stuck pixels from hanging the script forever
+            if time.time() - waitStart > maxWaitingTime: 
+                lastRenderedFrame = ledState
+                print(f"Rerendering frame {index+1}/{totalFiles} (stuck pixel)", end="\n")
+                prepareForNextFrame()
+                placeFrame(videoFramesProcessed[index])
+                autoit.send("2")
+                time.sleep(maxWaitingTime) # stuck pixels are rare, this is fine
+                pyautogui.screenshot(outputDirectory+str(index)+".png")
+                break
+    prepareForNextFrame()
 keyboardListener.stop()
 autoit.send("+p")
